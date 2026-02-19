@@ -8,7 +8,9 @@ A from-scratch manga/manhwa AI generation system — no pretrained backbone, sin
 
 Multiverse Origin Studio AI is a full end-to-end pipeline for anime/manga-style image generation, covering dataset collection, training, and inference. The system is specifically designed to run on mid-range consumer hardware without compromising on output quality.
 
-**Verified result:** Successfully trained on 2,000+ images using 16GB RAM + RTX 3060. Estimated training time: 3–4 days continuous (varies by epoch count and dataset size).
+This is not a fine-tuned wrapper over Stable Diffusion or any existing model. Every component — architecture, loss functions, resource management, and data pipeline — is built from scratch and designed to work as a coherent chain. Each part of the system understands what the others need, so training quality scales with architectural depth rather than raw data volume.
+
+**Verified result:** Successfully trained on 2,000+ curated images using 16GB RAM + RTX 3060. Estimated training time: 3–4 days continuous (varies by epoch count and dataset size). Quality-filtered data with domain-specific losses outperforms brute-force approaches requiring 10,000–50,000+ images.
 
 ---
 
@@ -29,21 +31,48 @@ Multiverse Origin Studio AI is a full end-to-end pipeline for anime/manga-style 
 
 **`MultiverseOriginStudioAI`** — Top-level controller class. Manages training loop, generation, checkpointing, and resource orchestration.
 
-**Mixture of Experts (MoE)** — Instead of a single monolithic model, tasks are delegated to specialized expert modules:
+**`EnhancedMoE` (14 Experts)** — Instead of a single monolithic model, tasks are routed to specialized expert agents. An intelligent router with learnable temperature selects and weights experts per input. Experts communicate through a cross-attention pass before their outputs are fused:
 
 | Expert | Responsibility |
 |--------|---------------|
-| `LineArtExpert` | Edge matching, line thickness via Laplacian convolution |
-| `ColorExpert` | Color theory, distribution matching, shading gradients |
-| `BackgroundExpert` | Scene structure, perspective, low-frequency spatial content |
-| `AdvancedCameraExpert` | Camera angles, projection matrix transformation |
-| `MultiLanguageStorySystem` | Story generation across 10 languages (Thai, English, Japanese, Korean, Chinese, and more) |
+| `line_art` | Edge structure, Laplacian-based thickness matching |
+| `color` | Color palette generation, harmony, distribution matching |
+| `light` | Lighting direction, intensity, shadow and specular generation |
+| `anatomy` | Body proportion constraints, symmetry enforcement |
+| `scene` | Scene layout, spatial composition |
+| `camera` | Camera angle, projection matrix transformation |
+| `story` | Multi-language narrative context (10 languages) |
+| `structure` | High-level compositional structure |
+| `precision` | Detail refinement and sharpness |
+| `memory` | Temporal consistency across frames/panels |
+| `safety` | Output constraint enforcement |
+| `editing` | Region-based modification support |
+| `quality` | Output quality scoring and enhancement |
+| `style` | Style fingerprinting and artist-aware generation |
+
+Each expert runs two passes — first independently, then again with cross-expert attention context — before outputs are fused through a multi-layer projection head.
+
+**`EnhancedGNN`** — Graph Neural Network (v4, 6 layers, multi-head attention) connecting expert outputs as graph nodes. Enables relational reasoning across experts rather than treating their outputs as independent signals.
+
+**`DataFlow`** — Thread-safe pipeline registry that handles module registration, inter-module connections, and ordered forward propagation. Allows dynamic rewiring of the computation graph without restructuring the model.
 
 **`DiffusionModel`** — U-Net architecture with time embedding and cross-attention text conditioning.
 
-**`VisionEncoder`** — Multi-scale CNN feature extraction from fine texture details up to semantic-level understanding.
+**`VisionEncoder`** — Multi-scale CNN feature extraction: fine texture (3×3) → mid-level structure (pooled) → semantic summary (AdaptiveAvgPool). Returns separate embeddings for structure, color, and composition.
 
-**`TextEncoder`** — Uses `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` for real semantic embeddings. Gracefully falls back to hash-based encoding if the model is unavailable.
+**`TextEncoder`** — Uses `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` for real semantic embeddings. Falls back to a deterministic SHA-256 hash-based encoding (not random) if the model is unavailable, preserving reproducibility.
+
+### Post-Processing Pipeline
+
+After generation, outputs pass through a dedicated enhancement chain:
+
+**`SuperResolutionSystem`** — 8-block residual SRGAN with PixelShuffle upsampling. Supports 2× and 4× upscaling with bicubic fallback for spatial alignment.
+
+**`AdvancedDetailEnhancer`** — Multi-scale detail extraction (3×3 / 5×5 / 7×7 kernels) fused with dedicated edge and texture enhancement branches.
+
+**`ColorVibrancySystem`** — Separate learnable adjustments for saturation, contrast, and brightness, followed by a color harmony pass.
+
+**`MultiScaleProcessor`** — Processes image at 1×, 2×, and 4× downsampled scales simultaneously, upsamples back and fuses, preserving both global structure and fine local detail.
 
 ---
 
@@ -77,23 +106,31 @@ Additional **Art Theory Losses** enforce higher-level artistic principles:
 
 ## Resource Management
 
-The system uses aggressive memory management to support multi-day continuous training.
+The system runs a multi-layer cache hierarchy specifically tuned for the R5 5500 + RTX 3060 combination, enabling stable multi-day training without manual intervention.
 
-**`EnhancedResourceManager`** — Monitors RAM, VRAM, and CPU in real time. Dynamically adjusts batch size and triggers cleanup before OOM conditions occur.
+**`EnhancedResourceManager`** — Monitors RAM, VRAM, and CPU continuously. Computes dynamic batch size based on available resources and current resolution. Distinguishes between OS cache (not counted as used RAM) and actual process memory for accurate headroom estimation. Triggers graduated cleanup: soft at 90% RAM / 92% VRAM, aggressive at 95%.
 
-**`L3CacheManager`** — Maximizes use of the R5 5500's 16MB L3 cache via an LRU eviction policy. Supports up to 1,500 cached tensor entries.
+**`L3CacheManager`** — Manages the CPU's 16MB L3 cache via an LRU eviction policy. Caches up to 1,500 tensor entries (~10KB each). Only caches tensors smaller than 50% of the cache budget to avoid thrashing. Tracks hit rate and eviction counts.
 
-**`SSDOptimizer`** — Uses the NVMe SSD as a persistent tensor cache. Preprocessed image tensors are written on first load and read directly on subsequent epochs, eliminating redundant disk I/O.
+**`SSDOptimizer`** — Uses the NVMe SSD as a persistent tensor cache with a 50,000-entry index and a 256MB write buffer. Preprocessed image tensors are serialized as `.pt` files on first access and served directly from disk on all subsequent epochs, eliminating redundant CPU decode and transform overhead.
 
 ```python
-# Resource allocation settings
+# Resource allocation
 max_ram_gb         = 14.4    # of 16GB  (1.6GB reserved for OS)
 max_vram_gb        = 11.4    # of 12GB
+cpu_threads        = 10      # R5 5500, 2 reserved for OS
 ssd_cache_entries  = 50_000
 ssd_buffer_size    = 256 * 1024 * 1024  # 256MB write buffer
+l3_cache_max_mb    = 15      # of 16MB L3 (1MB reserved)
 ```
 
-**Lazy Loading** — The dataset stores only file paths at initialization. Images are loaded on demand inside `__getitem__`, immediately serialized as `.pt` tensors to SSD cache, and served from cache on all subsequent accesses.
+**Thread Management** — DataLoader runs 8 persistent workers (10 threads − 2 reserved). Uses `multiprocessing_context='spawn'` for Windows compatibility. `pin_memory=True` when CUDA is available for faster host-to-device transfers.
+
+**Lazy Loading** — Dataset stores only file paths at initialization. Images are loaded on demand inside `__getitem__`, immediately serialized as `.pt` tensors to SSD cache, and served from cache on all subsequent accesses. Zero redundant image decoding after the first epoch.
+
+**OOM Prevention** — Before any high-memory operation, `prevent_oom()` checks both RAM and VRAM headroom. On detection: triggers aggressive cleanup (double `gc.collect()` + `cuda.empty_cache()` + `cuda.synchronize()`), then re-checks before proceeding. Falls back to minimum batch size of 1 under critical conditions.
+
+**Resolution-Aware Batch Sizing** — Batch size scales with target resolution: full batch at 512px, halved at 768px, quartered at 1024px, further reduced at 2048px. Prevents VRAM overflow without requiring manual tuning per run.
 
 ---
 

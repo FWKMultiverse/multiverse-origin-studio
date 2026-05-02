@@ -10,7 +10,7 @@
 
 This is not a wrapper, fine-tune, or derivative of Stable Diffusion, Midjourney, or any existing image generation model. Every component was designed with awareness of what every other component requires.
 
-**Verified result:** Successfully trained on 2,000+ curated images using 16GB RAM + RTX 3060 12GB VRAM. Estimated training time: 3–4 days continuous. Quality-filtered data with domain-specific losses outperforms brute-force approaches requiring 10,000–50,000+ images.
+**Verified result:** Successfully trained on 3,500+ curated images using 16GB RAM + RTX 3060 12GB VRAM. Estimated training time: 3–4 days continuous. Quality-filtered data with domain-specific losses outperforms brute-force approaches requiring 10,000–50,000+ images.
 
 ---
 
